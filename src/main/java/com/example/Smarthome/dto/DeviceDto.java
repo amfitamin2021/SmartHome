@@ -15,6 +15,8 @@ public class DeviceDto {
     private UUID id;
     private String name;
     private String type;
+    private String category;    // Категория устройства
+    private String subType;     // Подтип устройства
     private String protocol;
     private String status;
     private String connectionParams;
@@ -29,5 +31,6 @@ public class DeviceDto {
     private UUID locationId;
     private String locationName;
     private String thingsboardToken;
+    private String thingsboardId;   // ID устройства в ThingsBoard
     private Map<String, Object> attributes = new HashMap<>();
 } 

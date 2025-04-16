@@ -3,7 +3,9 @@ package com.example.Smarthome.service;
 import com.example.Smarthome.model.ConnectionProtocol;
 import com.example.Smarthome.model.Device;
 import com.example.Smarthome.model.DeviceStatus;
+import com.example.Smarthome.model.Room;
 import com.example.Smarthome.repository.DeviceRepository;
+import com.example.Smarthome.repository.RoomRepository;
 import com.example.Smarthome.service.ThingsBoardIntegrationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,7 @@ public class DeviceService {
     private final DeviceRepository deviceRepository;
     private final ProtocolAdapterService protocolAdapterService;
     private final ThingsBoardIntegrationService thingsBoardService;
+    private final RoomRepository roomRepository;
     
     public List<Device> getAllDevices() {
         return deviceRepository.findAll();
@@ -157,5 +160,17 @@ public class DeviceService {
         }
         
         return deviceRepository.findByThingsboardToken(token).orElse(null);
+    }
+    
+    /**
+     * Получает комнату по её ID
+     * @param roomId ID комнаты
+     * @return комната или null, если не найдена
+     */
+    public Room getRoomById(UUID roomId) {
+        if (roomId == null) {
+            return null;
+        }
+        return roomRepository.findById(roomId).orElse(null);
     }
 } 

@@ -1,5 +1,6 @@
 package com.example.Smarthome.service;
 
+import com.example.Smarthome.dto.AvailableDeviceDto;
 import com.example.Smarthome.model.Device;
 import com.example.Smarthome.repository.DeviceRepository;
 import lombok.RequiredArgsConstructor;
@@ -11,9 +12,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Сервис для интеграции с ThingsBoard
@@ -954,6 +958,124 @@ public class ThingsBoardIntegrationService {
         } catch (RestClientException e) {
             log.error("Ошибка при обновлении shared атрибутов устройства {} в ThingsBoard: {}", 
                     device.getName(), e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Получает список доступных устройств из ThingsBoard
+     * @return список доступных устройств
+     */
+    public List<AvailableDeviceDto> getAvailableDevices() {
+        List<Map<String, Object>> thingsBoardDevices = getAllDevicesFromThingsBoard();
+        List<AvailableDeviceDto> availableDevices = new ArrayList<>();
+        
+        for (Map<String, Object> device : thingsBoardDevices) {
+            try {
+                String deviceId = extractDeviceId(device);
+                if (deviceId == null) {
+                    log.error("Не удалось извлечь ID устройства из ответа ThingsBoard");
+                    continue;
+                }
+                
+                // Получаем токен устройства
+                String token = getDeviceCredentials(deviceId);
+                
+                // Извлекаем информацию об устройстве
+                String name = (String) device.getOrDefault("name", "");
+                String type = (String) device.getOrDefault("type", "");
+                
+                // Получаем дополнительные атрибуты, если они есть
+                String manufacturer = "";
+                String model = "";
+                String firmwareVersion = "";
+                
+                Map<String, Object> additionalInfo = (Map<String, Object>) device.get("additionalInfo");
+                if (additionalInfo != null) {
+                    manufacturer = (String) additionalInfo.getOrDefault("manufacturer", "");
+                    model = (String) additionalInfo.getOrDefault("model", "");
+                    firmwareVersion = (String) additionalInfo.getOrDefault("firmwareVersion", "");
+                }
+                
+                // Создаем DTO устройства
+                AvailableDeviceDto deviceDto = AvailableDeviceDto.builder()
+                    .id(deviceId)
+                    .name(name)
+                    .type(type)
+                    .token(token)
+                    .manufacturer(manufacturer)
+                    .model(model)
+                    .firmwareVersion(firmwareVersion)
+                    .build();
+                
+                availableDevices.add(deviceDto);
+            } catch (Exception e) {
+                log.error("Ошибка при обработке устройства из ThingsBoard: {}", e.getMessage(), e);
+            }
+        }
+        
+        return availableDevices;
+    }
+    
+    /**
+     * Извлекает ID устройства из JSON ответа ThingsBoard
+     * @param device данные устройства из ThingsBoard
+     * @return ID устройства или null в случае ошибки
+     */
+    private String extractDeviceId(Map<String, Object> device) {
+        if (device.containsKey("id")) {
+            Map<String, Object> idObj = (Map<String, Object>) device.get("id");
+            if (idObj != null && idObj.containsKey("id")) {
+                return (String) idObj.get("id");
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Отправляет данные телеметрии устройства в ThingsBoard
+     * @param device устройство
+     * @param telemetryData данные телеметрии в формате ключ-значение
+     * @return true если телеметрия успешно отправлена
+     */
+    public boolean sendTelemetry(Device device, Map<String, Object> telemetryData) {
+        if (!ensureAuthenticated() || 
+            device.getThingsboardToken() == null || 
+            device.getThingsboardDeviceId() == null) {
+            log.error("Невозможно отправить телеметрию: нет авторизации или отсутствуют данные устройства");
+            return false;
+        }
+        
+        try {
+            String deviceToken = device.getThingsboardToken();
+            log.info("Отправка телеметрии для устройства {} с токеном {}", device.getName(), deviceToken);
+            
+            // Создаем JSON запрос для отправки телеметрии
+            String telemetryUrl = thingsBoardUrl + "/api/v1/" + deviceToken + "/telemetry";
+            log.info("URL для отправки телеметрии: {}", telemetryUrl);
+            
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(telemetryData, headers);
+            
+            ResponseEntity<String> response = restTemplate.exchange(
+                    telemetryUrl,
+                    HttpMethod.POST,
+                    entity,
+                    String.class);
+            
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Телеметрия успешно отправлена для устройства {}", device.getName());
+                return true;
+            } else {
+                log.error("Ошибка при отправке телеметрии. Код: {}, Ответ: {}", 
+                          response.getStatusCode(), response.getBody());
+                return false;
+            }
+        } catch (Exception e) {
+            log.error("Ошибка при отправке телеметрии для устройства {}: {}", 
+                      device.getName(), e.getMessage(), e);
             return false;
         }
     }

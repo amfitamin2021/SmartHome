@@ -13,12 +13,15 @@ import java.util.UUID;
 public class DeviceRegistrationRequest {
     private String name;
     private String type;
+    private String category;    // Категория устройства (LIGHTING, SECURITY, CLIMATE, etc.)
+    private String subType;     // Подтип устройства (SMART_BULB, CAMERA, THERMOSTAT, etc.)
     private String protocol;
     private String connectionParams;
     private String manufacturer;
     private String model;
     private String firmwareVersion;
     private String thingsboardToken;
+    private String thingsboardId;    // ID устройства в ThingsBoard
     private UUID roomId;
     private UUID locationId;
     private Map<String, String> initialProperties = new HashMap<>();

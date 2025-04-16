@@ -19,6 +19,10 @@ public class Device {
     private String name;
     private String type;
     
+    // Новые поля для категории и подтипа устройства
+    private String category;
+    private String subType;
+    
     @Enumerated(EnumType.STRING)
     private ConnectionProtocol protocol;
     

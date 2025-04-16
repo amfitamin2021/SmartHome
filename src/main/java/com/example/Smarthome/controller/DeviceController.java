@@ -1,5 +1,6 @@
 package com.example.Smarthome.controller;
 
+import com.example.Smarthome.dto.AvailableDeviceDto;
 import com.example.Smarthome.dto.DeviceCommandRequest;
 import com.example.Smarthome.dto.DeviceDto;
 import com.example.Smarthome.dto.DeviceRegistrationRequest;
@@ -7,6 +8,7 @@ import com.example.Smarthome.model.ConnectionProtocol;
 import com.example.Smarthome.model.Device;
 import com.example.Smarthome.model.DeviceStatus;
 import com.example.Smarthome.model.Location;
+import com.example.Smarthome.model.Room;
 import com.example.Smarthome.service.DeviceService;
 import com.example.Smarthome.service.LocationService;
 import com.example.Smarthome.service.ProtocolAdapterService;
@@ -75,52 +77,118 @@ public class DeviceController {
      */
     @PostMapping
     public ResponseEntity<DeviceDto> registerDevice(@RequestBody DeviceRegistrationRequest request) {
-        Device device = new Device();
-        device.setName(request.getName());
-        device.setType(request.getType());
-        device.setProtocol(ConnectionProtocol.valueOf(request.getProtocol()));
-        device.setConnectionParams(request.getConnectionParams());
-        device.setManufacturer(request.getManufacturer());
-        device.setModel(request.getModel());
-        device.setFirmwareVersion(request.getFirmwareVersion());
-        device.setThingsboardToken(request.getThingsboardToken());
-        device.setStatus(DeviceStatus.OFFLINE);
+        log.info("Получен запрос на регистрацию устройства: {}", request);
         
-        // Устанавливаем связь с локацией
-        if (request.getLocationId() != null) {
-            // Получаем локацию из репозитория
-            Location location = locationService.getLocationById(request.getLocationId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, 
-                            "Локация с ID " + request.getLocationId() + " не найдена"));
-            device.setLocation(location);
-        }
-        
-        // Если это виртуальное устройство, сразу устанавливаем статус ONLINE
-        if (device.getProtocol() == ConnectionProtocol.VIRTUAL) {
-            device.setStatus(DeviceStatus.ONLINE);
-            device.setLastSeen(LocalDateTime.now());
-        }
-        
-        // Сначала сохраняем устройство
-        Device savedDevice = deviceService.saveDevice(device);
-        
-        // Создаем устройство в ThingsBoard, если не указан токен
-        if (savedDevice.getThingsboardToken() == null || savedDevice.getThingsboardToken().isEmpty()) {
-            boolean tbCreated = thingsBoardService.createDevice(savedDevice);
+        try {
+            Device device = new Device();
+            device.setName(request.getName());
+            device.setType(request.getType());
             
-            if (tbCreated) {
-                // Обновляем устройство с новым токеном
-                savedDevice = deviceService.saveDevice(savedDevice);
-                log.info("Устройство {} создано в ThingsBoard", savedDevice.getName());
-            } else {
-                log.warn("Не удалось создать устройство {} в ThingsBoard", savedDevice.getName());
+            // Установка категории и подтипа устройства
+            device.setCategory(request.getCategory());
+            device.setSubType(request.getSubType());
+            
+            // Для обратной совместимости, если subType указан, но type не указан
+            if (device.getType() == null && device.getSubType() != null) {
+                device.setType(device.getSubType());
             }
-        } else {
-            // Обновляем атрибуты в ThingsBoard
-            thingsBoardService.updateDeviceAttributes(savedDevice);
+            
+            device.setProtocol(ConnectionProtocol.valueOf(request.getProtocol()));
+            device.setConnectionParams(request.getConnectionParams());
+            device.setManufacturer(request.getManufacturer());
+            device.setModel(request.getModel());
+            device.setFirmwareVersion(request.getFirmwareVersion());
+            device.setThingsboardToken(request.getThingsboardToken());
+            
+            // Устанавливаем ID устройства из ThingsBoard, если он указан
+            if (request.getThingsboardId() != null && !request.getThingsboardId().isEmpty()) {
+                device.setThingsboardDeviceId(request.getThingsboardId());
+                log.info("Установлен идентификатор устройства ThingsBoard: {}", request.getThingsboardId());
+            }
+            
+            device.setStatus(DeviceStatus.OFFLINE);
+            
+            // Устанавливаем связь с локацией
+            if (request.getLocationId() != null) {
+                // Получаем локацию из репозитория
+                Location location = locationService.getLocationById(request.getLocationId())
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                                "Локация с ID " + request.getLocationId() + " не найдена"));
+                device.setLocation(location);
+            }
+            
+            // Если указан ID комнаты, устанавливаем её
+            if (request.getRoomId() != null) {
+                Room room = null;
+                try {
+                    room = deviceService.getRoomById(request.getRoomId());
+                } catch (Exception e) {
+                    log.warn("Не удалось найти комнату с ID: {}", request.getRoomId());
+                }
+                device.setRoom(room);
+            }
+            
+            // Если это виртуальное устройство, сразу устанавливаем статус ONLINE
+            if (device.getProtocol() == ConnectionProtocol.VIRTUAL) {
+                device.setStatus(DeviceStatus.ONLINE);
+                device.setLastSeen(LocalDateTime.now());
+            }
+            
+            // Установка начальных свойств в зависимости от категории и типа устройства
+            if (request.getInitialProperties() != null && !request.getInitialProperties().isEmpty()) {
+                device.getProperties().putAll(request.getInitialProperties());
+            } else {
+                // Автоматическое добавление базовых свойств в зависимости от категории и типа
+                enrichDevicePropertiesByCategoryAndType(device);
+            }
+            
+            // Установка возможностей устройства
+            if (request.getCapabilities() != null && !request.getCapabilities().isEmpty()) {
+                device.getCapabilities().putAll(request.getCapabilities());
+            }
+            
+            // Сначала сохраняем устройство
+            Device savedDevice = deviceService.saveDevice(device);
+            
+            // Создаем устройство в ThingsBoard, если не указан токен
+            if (savedDevice.getThingsboardToken() == null || savedDevice.getThingsboardToken().isEmpty()) {
+                boolean tbCreated = thingsBoardService.createDevice(savedDevice);
+                
+                if (tbCreated) {
+                    // Обновляем устройство с новым токеном
+                    savedDevice = deviceService.saveDevice(savedDevice);
+                    log.info("Устройство {} создано в ThingsBoard", savedDevice.getName());
+                } else {
+                    log.warn("Не удалось создать устройство {} в ThingsBoard", savedDevice.getName());
+                }
+            } else {
+                // Обновляем атрибуты в ThingsBoard
+                thingsBoardService.updateDeviceAttributes(savedDevice);
+                
+                // Если это датчик влажности, отправляем начальные значения телеметрии
+                if ("CLIMATE".equals(savedDevice.getCategory()) && "HUMIDITY_SENSOR".equals(savedDevice.getSubType())) {
+                    try {
+                        // Создаем данные телеметрии для инициализации
+                        Map<String, Object> telemetryData = new HashMap<>();
+                        telemetryData.put("humidity", 45); // Начальное значение влажности
+                        telemetryData.put("battery", 98);  // Начальное значение батареи
+                        
+                        // Отправляем телеметрию в ThingsBoard
+                        thingsBoardService.sendTelemetry(savedDevice, telemetryData);
+                        
+                        log.info("Отправлены начальные данные телеметрии для датчика влажности: {}", telemetryData);
+                    } catch (Exception e) {
+                        log.error("Ошибка при отправке начальной телеметрии для датчика влажности: {}", e.getMessage(), e);
+                    }
+                }
+            }
+            
+            return ResponseEntity.status(HttpStatus.CREATED).body(convertToDto(savedDevice));
+        } catch (Exception e) {
+            log.error("Ошибка при регистрации устройства: {}", e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, 
+                    "Ошибка при регистрации устройства: " + e.getMessage());
         }
-        
-        return ResponseEntity.status(HttpStatus.CREATED).body(convertToDto(savedDevice));
     }
 
     /**
@@ -135,6 +203,16 @@ public class DeviceController {
 
         device.setName(request.getName());
         device.setType(request.getType());
+        
+        // Обновление категории и подтипа устройства
+        if (request.getCategory() != null) {
+            device.setCategory(request.getCategory());
+        }
+        
+        if (request.getSubType() != null) {
+            device.setSubType(request.getSubType());
+        }
+        
         device.setProtocol(ConnectionProtocol.valueOf(request.getProtocol()));
         device.setConnectionParams(request.getConnectionParams());
         device.setManufacturer(request.getManufacturer());
@@ -205,6 +283,56 @@ public class DeviceController {
                     "Устройство " + device.getName() + " находится в состоянии OFFLINE");
         }
         
+        // Специальная обработка для команды updateTelemetry
+        if ("updateTelemetry".equals(request.getCommand())) {
+            Map<String, String> parameters = request.getParameters();
+            Map<String, Object> telemetryData = new HashMap<>();
+            
+            // Преобразуем параметры для телеметрии (без префиксов tb_)
+            // Телеметрия - это данные, которые хранятся отдельно от атрибутов в ThingsBoard
+            if (parameters.containsKey("humidity")) {
+                telemetryData.put("humidity", Integer.parseInt(parameters.get("humidity")));
+            }
+            
+            if (parameters.containsKey("battery")) {
+                telemetryData.put("battery", Integer.parseInt(parameters.get("battery")));
+            }
+            
+            // Создаем final копию объекта device
+            final Device finalDevice = device;
+            
+            // Сохраняем свойства устройства локально
+            parameters.forEach((key, value) -> {
+                if (key.startsWith("tb_") || !key.contains("humidity") || !key.contains("battery")) {
+                    finalDevice.getProperties().put(key, value);
+                }
+            });
+            
+            // Сохраняем устройство
+            deviceService.saveDevice(finalDevice);
+            
+            // Отправляем телеметрию в ThingsBoard, если есть данные
+            if (!telemetryData.isEmpty() && finalDevice.getThingsboardToken() != null) {
+                boolean success = thingsBoardService.sendTelemetry(finalDevice, telemetryData);
+                
+                if (!success) {
+                    log.warn("Не удалось отправить телеметрию в ThingsBoard для устройства {}", finalDevice.getName());
+                }
+            }
+            
+            // Возвращаем ответ
+            Map<String, Object> response = Map.of(
+                    "success", true,
+                    "device_id", id.toString(),
+                    "command", request.getCommand(),
+                    "parameters", request.getParameters(),
+                    "properties", finalDevice.getProperties()
+            );
+            
+            return ResponseEntity.ok(response);
+        }
+        
+        // Стандартная обработка для других команд
         // Разделяем параметры на атрибуты и обычные свойства устройства
         Map<String, String> deviceParameters = new HashMap<>();
         Map<String, String> serverAttributes = new HashMap<>();
@@ -381,6 +509,15 @@ public class DeviceController {
     }
 
     /**
+     * Получение списка доступных устройств из ThingsBoard
+     */
+    @GetMapping("/available-devices")
+    public ResponseEntity<List<AvailableDeviceDto>> getAvailableDevices() {
+        List<AvailableDeviceDto> devices = thingsBoardService.getAvailableDevices();
+        return ResponseEntity.ok(devices);
+    }
+
+    /**
      * Конвертация модели устройства в DTO
      */
     private DeviceDto convertToDto(Device device) {
@@ -388,6 +525,11 @@ public class DeviceController {
         dto.setId(device.getId());
         dto.setName(device.getName());
         dto.setType(device.getType());
+        
+        // Добавляем категорию и подтип устройства
+        dto.setCategory(device.getCategory());
+        dto.setSubType(device.getSubType());
+        
         dto.setProtocol(device.getProtocol().name());
         dto.setStatus(device.getStatus().name());
         dto.setConnectionParams(device.getConnectionParams());
@@ -398,6 +540,7 @@ public class DeviceController {
         dto.setModel(device.getModel());
         dto.setFirmwareVersion(device.getFirmwareVersion());
         dto.setThingsboardToken(device.getThingsboardToken());
+        dto.setThingsboardId(device.getThingsboardDeviceId());
         
         // Добавляем атрибуты
         dto.setAttributes(device.getAttributes());
@@ -413,5 +556,124 @@ public class DeviceController {
         }
         
         return dto;
+    }
+    
+    /**
+     * Метод для автоматического добавления базовых свойств устройству в зависимости от категории и типа
+     */
+    private void enrichDevicePropertiesByCategoryAndType(Device device) {
+        String category = device.getCategory();
+        String subType = device.getSubType();
+        
+        if (category == null || subType == null) {
+            return;
+        }
+        
+        // Генерируем уникальный ID для устройства
+        String uniqueId = subType.toLowerCase() + "_" + UUID.randomUUID().toString().substring(0, 8);
+        device.getProperties().put("device_unique_id", uniqueId);
+        
+        switch(category) {
+            case "LIGHTING":
+                if ("SMART_BULB".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_brightness", "80");
+                    device.getProperties().put("tb_color", "FFFFFF");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("brightness", "true");
+                    device.getCapabilities().put("color", "true");
+                } else if ("LED_STRIP".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_brightness", "80");
+                    device.getProperties().put("tb_color", "FFFFFF");
+                    device.getProperties().put("tb_effect", "none");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("brightness", "true");
+                    device.getCapabilities().put("color", "true");
+                    device.getCapabilities().put("effects", "true");
+                }
+                break;
+                
+            case "CLIMATE":
+                if ("THERMOSTAT".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_temperature", "22");
+                    device.getProperties().put("tb_target_temperature", "22");
+                    device.getProperties().put("tb_mode", "auto");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("temperature", "true");
+                    device.getCapabilities().put("target_temperature", "true");
+                    device.getCapabilities().put("mode", "true");
+                } else if ("TEMPERATURE_SENSOR".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_temperature", "22");
+                    
+                    device.getCapabilities().put("temperature", "true");
+                } else if ("HUMIDITY_SENSOR".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_humidity", "45");
+                    device.getProperties().put("tb_temperature", "22");
+                    device.getProperties().put("tb_battery", "98");
+                    device.getProperties().put("tb_last_updated", LocalDateTime.now().toString());
+                    
+                    device.getCapabilities().put("humidity", "true");
+                    device.getCapabilities().put("temperature", "true");
+                    device.getCapabilities().put("battery", "true");
+                }
+                break;
+                
+            case "SECURITY":
+                if ("CAMERA".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_recording", "off");
+                    device.getProperties().put("tb_motion_detection", "on");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("recording", "true");
+                    device.getCapabilities().put("motion_detection", "true");
+                } else if ("SMART_LOCK".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_locked", "true");
+                    device.getProperties().put("tb_battery", "100");
+                    
+                    device.getCapabilities().put("lock", "true");
+                    device.getCapabilities().put("battery", "true");
+                }
+                break;
+                
+            case "APPLIANCES":
+                if ("TV".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_volume", "50");
+                    device.getProperties().put("tb_channel", "1");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("volume", "true");
+                    device.getCapabilities().put("channel", "true");
+                } else if ("VACUUM".equals(subType)) {
+                    device.getProperties().put("attr_server_active", "true");
+                    device.getProperties().put("tb_power", "off");
+                    device.getProperties().put("tb_mode", "auto");
+                    device.getProperties().put("tb_battery", "100");
+                    
+                    device.getCapabilities().put("toggle", "true");
+                    device.getCapabilities().put("mode", "true");
+                    device.getCapabilities().put("battery", "true");
+                }
+                break;
+                
+            default:
+                // Для всех остальных типов устройств устанавливаем базовые свойства
+                device.getProperties().put("attr_server_active", "true");
+                device.getProperties().put("tb_power", "off");
+        }
     }
 } 
